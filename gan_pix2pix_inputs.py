@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageOps
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 from datetime import datetime
-import os, os.path, rasterizer, sys, shutil
+import os, os.path, rasterizer, sys, shutil, time
 
 # === REQUIREMENTS ===
 # Corresponding floor and support filenames have to be the same
@@ -22,10 +22,11 @@ REGION = "Gemeinde Schwerte" # change region to load a different data set
 DIR = 'Testdaten/testdatav1' # the directory where the floor and support directories are saved
 NUM_TRAIN_DATA = len(os.listdir(DIR + "/floor")) # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
 LEARNING_RATE_G = 0.02 # learning rate generator
-LEARNING_RATE_D = 0.002 # learning rate discriminator
-BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
+LEARNING_RATE_D = 0.02 # learning rate discriminator
+BETA_1 = 0.9 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
 MINI_BATCH = 64
+EXPERIMENT_NAME = "Original GAN" # naming variable to distinguish between experiments
 # ===============
 
 # === CONVOLUTIONAL LAYER STRUCTURE ===
@@ -138,6 +139,9 @@ class Generator(nn.Module):
 
 # === TRAINING GAN ===
 def main():
+    # start time
+    time_start = datetime.now()
+
     print("Uploading models to GPU...")
     D = Discriminator()
     D.cuda()
@@ -146,8 +150,7 @@ def main():
     print("Done.")
 
     # save this file, rasterizer.py and some parameters for later reference
-    now = datetime.now()
-    res_dir = now.strftime('%Y-%m-%d %H:%M:%S')
+    res_dir = time_start.strftime('%Y-%m-%d %H:%M:%S ') + EXPERIMENT_NAME
     os.mkdir(os.path.join("Ergebnisse/", res_dir))
     shutil.copyfile(sys.argv[0], os.path.join(os.path.join("Ergebnisse/", res_dir), "GAN.py"))
     shutil.copyfile(f"Code/rasterizer.py", os.path.join(os.path.join("Ergebnisse/", res_dir), "rasterizer.py"))
@@ -163,7 +166,7 @@ def main():
     file.write(f"Beta 2 = {BETA_2}\n")
     file.write(f"Dataset from which traning samples are taken = {REGION}\n")
     file.write(f"Directory where the floor/support directories are for testing = {DIR}\n")
-    file.write(f"\n {G} \n {D}\n")
+    file.write(f"\n {G} \n\n {D}\n")
     file.close()
 
     # load the training data
@@ -221,6 +224,8 @@ def main():
     im_as_np_array = None
     print("Done.")
 
+    time_now = datetime.now() # used to time how long test/training samples, network are uploaded and Specs.txt is created
+
     # start training
     print("Starting training")
 
@@ -228,15 +233,13 @@ def main():
     fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(2,2)
     im = ax1.imshow(np.zeros(DIM+(3,)))
     im2 = ax3.imshow(np.zeros(DIM+(3,)))
+    manager = plt.get_current_fig_manager()
+    manager.window.showMaximized()
 
     progress_loss_G = []
     progress_loss_D = []
 
-    for epoch in range(EPOCHS):
-        # print every 5% of training process
-        if epoch % (EPOCHS * 0.05) == 0:
-            print(f"{epoch / EPOCHS * 100}%")
-        
+    for epoch in range(EPOCHS):      
         # train discriminator D
         D.zero_grad()
 
@@ -245,8 +248,8 @@ def main():
         test_imgs_batch = torch.index_select(test_imgs, 0, indices)
         floor_input = test_imgs_batch[:,0,:,:].reshape((MINI_BATCH,1)+DIM)
         # train_imgs_batch = test_imgs[:,0:1,:,:]
-        print(f"test_imgs_batch.shape={test_imgs_batch.shape}")
-        print(f"floor plans input: {floor_input.shape}")
+        # print(f"test_imgs_batch.shape={test_imgs_batch.shape}")
+        # print(f"floor plans input: {floor_input.shape}")
 
         D_res = D.forward(test_imgs_batch)
         # print(f"D_res.shape={D_res.shape}")
@@ -301,7 +304,15 @@ def main():
             ax2.legend()
             fig.canvas.draw_idle()
             plt.savefig(f'Ergebnisse/{res_dir}/{epoch}.png')
-            plt.pause(0.01)
+            fig.canvas.flush_events()
+
+    time_end = datetime.now()
+    file = open(f"Ergebnisse/{res_dir}/Specs.txt", "a")
+    file.write(f"\n Execution start = {time_start}\n")
+    file.write(f"Exectuion stop = {time_end}\n")
+    file.write(f"Total execution time = {time_end - time_start}\n")
+    file.write(f"Time used to upload training samples, test samples and the network to the GPU = {time_start - time_now}\n")
+    file.close()
 # ==============
 
 if __name__ == "__main__":
