@@ -23,10 +23,10 @@ DIR = 'Testdaten/testdatav1' # the directory where the floor and support directo
 NUM_TRAIN_DATA = len(os.listdir(DIR + "/floor")) # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
 LEARNING_RATE_G = 0.02 # learning rate generator
 LEARNING_RATE_D = 0.02 # learning rate discriminator
-BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
+BETA_1 = 0.9 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
 MINI_BATCH = 64
-EXPERIMENT_NAME = "Original GAN" # naming variable to distinguish between experiments
+EXPERIMENT_NAME = "LR decay" # naming variable to distinguish between experiments
 # ===============
 
 # === CONVOLUTIONAL LAYER STRUCTURE ===
@@ -100,6 +100,7 @@ class Discriminator(nn.Module):
         )
         self.loss_function = nn.MSELoss().cuda()
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_D, betas=(BETA_1, BETA_2))
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.5)
 
     def forward(self, input):
         return self.model(input)
@@ -132,6 +133,7 @@ class Generator(nn.Module):
             DeconvLayerGen(8, 1),
         )
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_G, betas=(BETA_1, BETA_2))
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.5)
 
     def forward(self, inputs):
         return self.model(inputs)
@@ -273,6 +275,7 @@ def main():
         D_train_loss.backward()
         #if epoch < 20 or True:
         D.optimizer.step()
+        D.scheduler.step()
 
         # train generator G
         G.zero_grad()
@@ -284,6 +287,7 @@ def main():
         G_train_loss = D.loss_function(D_res, torch.ones_like(D_res, requires_grad=True).cuda()).cuda()
         G_train_loss.backward()
         G.optimizer.step()
+        D.scheduler.step()
 
         progress_loss_G.append(G_train_loss.item())
         progress_loss_D.append(D_train_loss.item())

@@ -30,5 +30,8 @@ def raster_images(DIM, SAMPLES, REGION):
 
         # save image in 3D block
         im_as_np_array[i] = np.asarray(im)
+
+    im_as_np_array /= np.amax(im_as_np_array)
+    print(f"raster images min: {np.amin(im_as_np_array)} max: {np.amax(im_as_np_array)}")
     return im_as_np_array
 # ====================

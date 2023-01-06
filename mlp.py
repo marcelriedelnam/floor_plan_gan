@@ -23,10 +23,10 @@ DIR = 'Testdaten/testdatav1' # the directory where the floor and support directo
 NUM_TRAIN_DATA = len(os.listdir(DIR + "/floor")) # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
 LEARNING_RATE_G = 0.02 # learning rate generator
 LEARNING_RATE_D = 0.02 # learning rate discriminator
-BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
+BETA_1 = 0.9 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
 MINI_BATCH = 64
-EXPERIMENT_NAME = "Original GAN" # naming variable to distinguish between experiments
+EXPERIMENT_NAME = "MLP inst ResNet" # naming variable to distinguish between experiments
 # ===============
 
 # === CONVOLUTIONAL LAYER STRUCTURE ===
@@ -58,25 +58,6 @@ class DeconvLayerGen(nn.Module):
         x = F.pad(x, (0, -1, 0, -1), "constant", 0)
         return x
 # =============
-
-# === RESIDUAL BLOCK STRUCTURE ===
-class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
-        super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(out_channels),
-        )
-        self.relu = nn.ReLU()
-    
-    def forward(self, x):
-        x = self.conv1(x) + x
-        x = self.relu(x)
-        return x
-# =========
 
 # === DISCRIMINATOR MODEL ===
 class Discriminator(nn.Module):
@@ -112,24 +93,28 @@ class Generator(nn.Module):
 
         self.model = nn.Sequential(
             # Convulational Layers
-            ConvLayerGen(1, 8),
-            ConvLayerGen(8, 32),
-            ConvLayerGen(32, 128),
-            ConvLayerGen(128, 512),
-            # ResNet
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
+            ConvLayerGen(1, 2),
+            ConvLayerGen(2, 4),
+            ConvLayerGen(4, 8),
+            ConvLayerGen(8, 16),
+            # MLP
+            nn.Linear(16, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 16),
+            nn.ReLU(),
             # Deconvolutional Layers
-            DeconvLayerGen(512, 128),
-            DeconvLayerGen(128, 32),
-            DeconvLayerGen(32, 8),
-            DeconvLayerGen(8, 1),
+            DeconvLayerGen(16, 8),
+            DeconvLayerGen(8, 4),
+            DeconvLayerGen(4, 2),
+            DeconvLayerGen(2, 1),
         )
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_G, betas=(BETA_1, BETA_2))
 

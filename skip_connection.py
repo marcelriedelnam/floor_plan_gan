@@ -23,10 +23,10 @@ DIR = 'Testdaten/testdatav1' # the directory where the floor and support directo
 NUM_TRAIN_DATA = len(os.listdir(DIR + "/floor")) # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
 LEARNING_RATE_G = 0.02 # learning rate generator
 LEARNING_RATE_D = 0.02 # learning rate discriminator
-BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
+BETA_1 = 0.9 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
 MINI_BATCH = 64
-EXPERIMENT_NAME = "Original GAN" # naming variable to distinguish between experiments
+EXPERIMENT_NAME = "Skip Connection" # naming variable to distinguish between experiments
 # ===============
 
 # === CONVOLUTIONAL LAYER STRUCTURE ===
@@ -46,10 +46,10 @@ class ConvLayerGen(nn.Module):
 
 # === DECONVOLUTIONAL LAYER STRUCTURE ===
 class DeconvLayerGen(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, should_batchnorm = True):
         super().__init__()
         self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2)
-        self.batch_norm = nn.BatchNorm2d(in_channels)
+        self.batch_norm = nn.BatchNorm2d(in_channels) if should_batchnorm else lambda x: x
 
     def forward(self, x):
         x = self.batch_norm(x)
@@ -109,14 +109,11 @@ class Discriminator(nn.Module):
 class Generator(nn.Module):
     def __init__(self):
         super().__init__()
-
+        self.conv = ConvLayerGen(1, 8)
         self.model = nn.Sequential(
-            # Convulational Layers
-            ConvLayerGen(1, 8),
             ConvLayerGen(8, 32),
             ConvLayerGen(32, 128),
             ConvLayerGen(128, 512),
-            # ResNet
             ResidualBlock(512, 512),
             ResidualBlock(512, 512),
             ResidualBlock(512, 512),
@@ -125,16 +122,19 @@ class Generator(nn.Module):
             ResidualBlock(512, 512),
             ResidualBlock(512, 512),
             ResidualBlock(512, 512),
-            # Deconvolutional Layers
             DeconvLayerGen(512, 128),
             DeconvLayerGen(128, 32),
-            DeconvLayerGen(32, 8),
-            DeconvLayerGen(8, 1),
+            DeconvLayerGen(32, 8)
         )
+        self.deconv = DeconvLayerGen(8 + 8, 1, False)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_G, betas=(BETA_1, BETA_2))
 
     def forward(self, inputs):
-        return self.model(inputs)
+        x1 = self.conv(inputs)
+        x2 = self.model(x1)
+        x = torch.cat([x2, x1], dim=1)
+        return self.deconv(x)
+
 # =============
 
 # === TRAINING GAN ===
