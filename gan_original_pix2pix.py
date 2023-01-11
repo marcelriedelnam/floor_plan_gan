@@ -7,27 +7,63 @@ from PIL import Image, ImageDraw, ImageOps
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 from datetime import datetime
-import os, os.path, rasterizer, sys, shutil, time
+import os, os.path, sys, shutil, time
 
 # === REQUIREMENTS ===
 # Corresponding floor and support filenames have to be the same
-# Floor and support directories have to be named "floor" and "support" and have to be in the same directory
+# Floor and support directories have to be in the same directory
 # ============
 
 # === GLOBAL VARIABLES ===
-DIM = (256, 256)
-SAMPLES = 5000 # rasterized image output dimensions
+DIM = (512,512) 
+SAMPLES = 100 # rasterized image output dimension
 EPOCHS = 2000 # number of training iterations
 REGION = "Gemeinde Schwerte" # change region to load a different data set
-DIR = 'Testdaten/testdatav1' # the directory where the floor and support directories are saved
-NUM_TRAIN_DATA = len(os.listdir(DIR + "/floor")) # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
-LEARNING_RATE_G = 0.02 # learning rate generator
-LEARNING_RATE_D = 0.02 # learning rate discriminator
-BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
+DIR = 'Testdaten/testdata_marcel' # the directory where the floor and support directories are saved
+#NUM_TRAIN_DATA = len(os.listdir(DIR + "/01_fl")) # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
+NUM_TRAIN_DATA = 100 # NUM_TRAIN_DATA = get the number of test samples (files) from the directory DIR
+LEARNING_RATE_G = 0.005 # learning rate generator
+LEARNING_RATE_D = 0.005 # learning rate discriminator
+BETA_1 = 0.8 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
-MINI_BATCH = 64
+MINI_BATCH = 16
 EXPERIMENT_NAME = "Original GAN" # naming variable to distinguish between experiments
 # ===============
+
+# === FUNCTION TO RASTERIZE FLOOR PLATE ===
+def raster_images(DIM, SAMPLES, REGION):
+    # shapes is of the shape: np.array(list(np.array(np.array)))
+    # to get a tuple use shapes[i][0][j][k], i=shape_nr, j=tuple_nr, k=tuple_idx
+    shapes = np.load(f"Testdaten/trainingdata/extracteddata/{REGION}.npy", allow_pickle=True)
+
+    # choose SAMPLES many random samples
+    buildings = np.random.choice(shapes, SAMPLES)
+    shapes = None
+
+    # todo: sind haeuser ueberhaupt richtig? sind ja keine richtigen gebaeude wie in den daten
+    # todo: ich male immer nur alles in einem polygon an, k.p. was mit den innenhoefen passiert
+
+    # initialize 3D block for layers of 2D images
+    im_as_np_array = np.zeros((len(buildings),) + DIM)
+    for i in range(len(buildings)):
+        max_val = buildings[i][0].max(axis=0)
+        min_val = buildings[i][0].min(axis=0)
+
+        # scale images to size DIM
+        buildings[i][0] = (buildings[i][0] - min_val) / (max_val - min_val) * 256
+
+        im = Image.new("L", DIM, 0)
+        draw = ImageDraw.Draw(im)
+        # https://stackoverflow.com/questions/10016352/convert-numpy-array-to-tuple
+        draw.polygon(tuple(map(tuple, buildings[i][0])), fill=(255))
+
+        # save image in 3D block
+        im_as_np_array[i] = np.asarray(im)
+
+    im_as_np_array /= np.amax(im_as_np_array)
+    # print(f"raster images min: {np.amin(im_as_np_array)} max: {np.amax(im_as_np_array)}")
+    return im_as_np_array
+# ====================
 
 # === CONVOLUTIONAL LAYER STRUCTURE ===
 class ConvLayerGen(nn.Module):
@@ -48,14 +84,14 @@ class ConvLayerGen(nn.Module):
 class DeconvLayerGen(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2)
+        self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
         self.batch_norm = nn.BatchNorm2d(in_channels)
 
     def forward(self, x):
         x = self.batch_norm(x)
         x = self.deconv(x)
-        x = F.leaky_relu(x)
-        x = F.pad(x, (0, -1, 0, -1), "constant", 0)
+        x = F.pad(x, (0, 1, 0, 1), "constant", 0)
+        x = F.relu(x)
         return x
 # =============
 
@@ -98,7 +134,7 @@ class Discriminator(nn.Module):
             nn.Conv2d(64, 1, kernel_size=4, stride=1, padding=1),
             nn.Sigmoid(),
         )
-        self.loss_function = nn.MSELoss().cuda()
+        self.loss_function = nn.BCELoss().cuda()
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_D, betas=(BETA_1, BETA_2))
 
     def forward(self, input):
@@ -115,21 +151,22 @@ class Generator(nn.Module):
             ConvLayerGen(1, 8),
             ConvLayerGen(8, 32),
             ConvLayerGen(32, 128),
-            ConvLayerGen(128, 512),
+            # ConvLayerGen(128, 256),
             # ResNet
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
+            ResidualBlock(128, 128),
+            ResidualBlock(128, 128),
+            ResidualBlock(128, 128),
+            # ResidualBlock(256, 256),
+            # ResidualBlock(512, 512),
+            # ResidualBlock(512, 512),
+            # ResidualBlock(512, 512),
+            # ResidualBlock(512, 512),
             # Deconvolutional Layers
-            DeconvLayerGen(512, 128),
+            # DeconvLayerGen(256, 128),
             DeconvLayerGen(128, 32),
             DeconvLayerGen(32, 8),
-            DeconvLayerGen(8, 1),
+            DeconvLayerGen(8,1),
+            nn.Sigmoid(),
         )
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_G, betas=(BETA_1, BETA_2))
 
@@ -153,7 +190,6 @@ def main():
     res_dir = time_start.strftime('%Y-%m-%d %H:%M:%S ') + EXPERIMENT_NAME
     os.mkdir(os.path.join("Ergebnisse/", res_dir))
     shutil.copyfile(sys.argv[0], os.path.join(os.path.join("Ergebnisse/", res_dir), "GAN.py"))
-    shutil.copyfile(f"Code/rasterizer.py", os.path.join(os.path.join("Ergebnisse/", res_dir), "rasterizer.py"))
     file = open(f"Ergebnisse/{res_dir}/Specs.txt", "w")
     file.write(f"Dimension of the pictures = {DIM}\n")
     file.write(f"Number of epochs = {EPOCHS}\n")
@@ -170,23 +206,30 @@ def main():
     file.close()
 
     # load the training data
-    print("Uploading training data samples to GPU...")
+    # print("Uploading training data samples to GPU...")
     # DIM = dimension of the pictures, SAMPLES = how many samples, DATA = 
-    train_imgs = torch.FloatTensor(rasterizer.raster_images(DIM, SAMPLES, REGION)).cuda()
+    # train_imgs = torch.FloatTensor(raster_images(DIM, SAMPLES, REGION)).cuda()
     # print(f"train_imgs.shape={train_imgs.shape} dtpe={train_imgs.dtype}")
-    print("Done.")
+    # print("Done.")
 
     # load test data as images, crop and resize
     print("Uploading test data samples to GPU...")
     # initialize 4D block for layers of 2D images (image_nr, floor_or_supprt, pixel_x, pixel_y)
     im_as_np_array = np.zeros((NUM_TRAIN_DATA*8,2) + DIM, dtype=np.float32) # NUM_TRAIN_DATA*8 because the pictures are flipped (horizontally/ vertically) and rotated (90,180,270 deg)
     counter = 0
-    for files in os.listdir(DIR + "/floor")[:NUM_TRAIN_DATA]:
-        floor = Image.open(os.path.join(DIR + "/floor", files)).convert('L')
-        support = Image.open(os.path.join(DIR + "/supports", files)).convert('L')
+    assert len(os.listdir(DIR + "/01_fl")) == len(os.listdir(DIR + "/02_sl")) == len(os.listdir(DIR + "/03_co")) == len(os.listdir(DIR + "/05_ax"))
+    for files in os.listdir(DIR + "/02_sl")[:NUM_TRAIN_DATA]:
+        # ZB_0048_01_fl.png, ZB_0133_01_fl.png are empty images (no need to generate support structures then)
+        if (files == 'ZB_0048_02_sl.png') or (files == 'ZB_0133_02_sl.png'):
+            continue
+        floor = Image.open(os.path.join(DIR + "/02_sl", files)).convert('L')
+        supp_files = files[:len(files)-9] + '03_co.png'
+        support = Image.open(os.path.join(DIR + "/03_co", supp_files)).convert('L')
+        w, h = floor.size
+        floor = floor.crop((1,1,w-1,h-1))            
         img_arr = np.array(floor)
         # get the corners of the floor plans
-        whiteY, whiteX = np.where(img_arr==255)
+        whiteY, whiteX = np.where(img_arr!=255)
         top, bottom = np.min(whiteY), np.max(whiteY)
         left,right = np.min(whiteX), np.max(whiteX)
         # calculate the size of the dimension
@@ -200,6 +243,13 @@ def main():
         else:
             floor = floor.crop((left, top - delta_xy / 2, right, bottom + delta_xy / 2)).resize(DIM)
             support = support.crop((left, top - delta_xy / 2, right, bottom + delta_xy / 2)).resize(DIM)
+        # turn grayscale image into bw image
+        thresh = 200
+        fn = lambda x : 255 if x > thresh else 0
+        floor = floor.convert('L').point(fn, mode='1')
+        support = support.convert('L').point(fn, mode='1')
+        if counter == 0:
+            support.show()
         # save image in 4D block
         im_as_np_array[counter] = np.append(np.array(floor), np.array(support)).reshape((2,) + DIM)
         # Data Augmentation
@@ -219,7 +269,7 @@ def main():
         im_as_np_array[counter+6] = np.append(np.array(ImageOps.mirror(floor_r180)), np.array(ImageOps.mirror(support_r180))).reshape((2,) + DIM)
         im_as_np_array[counter+7] = np.append(np.array(ImageOps.mirror(floor_r270)), np.array(ImageOps.mirror(support_r270))).reshape((2,) + DIM)
         counter += 8
-    im_as_np_array /= np.amax(im_as_np_array)
+    print(f"Training image size: {round(sys.getsizeof(im_as_np_array) / 1024 / 1024,2)} MB")
     test_imgs = torch.FloatTensor(im_as_np_array).cuda()
     # print(f"test_imgs.shape={test_imgs.shape} dtype={test_imgs.dtype}")
     im_as_np_array = None
@@ -231,9 +281,10 @@ def main():
     print("Starting training")
 
     # https://stackoverflow.com/questions/51520143/update-matplotlib-image-in-a-function
-    fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(2,2)
+    #fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(2,2)
+    fig, (ax1,ax2) = plt.subplots(1,2)
     im = ax1.imshow(np.zeros(DIM+(3,)))
-    im2 = ax3.imshow(np.zeros(DIM+(3,)))
+    # im2 = ax3.imshow(np.zeros(DIM+(3,)))
     manager = plt.get_current_fig_manager()
     manager.window.showMaximized()
 
@@ -294,10 +345,10 @@ def main():
             image[:,:,1] = G_res[0, 0].cpu().detach().numpy()
             im.set_data(image)
 
-            input_img = train_imgs[torch.randint(0, train_imgs.shape[0], (1,))]
-            image[:,:,0] = input_img.cpu().detach().numpy()
-            image[:,:,1] = G.forward(input_img.reshape((1,1)+DIM).cuda())[0][0].cpu().detach().numpy()
-            im2.set_data(image)
+            # input_img = train_imgs[torch.randint(0, train_imgs.shape[0], (1,))]
+            # image[:,:,0] = input_img.cpu().detach().numpy()
+            # image[:,:,1] = G.forward(input_img.reshape((1,1)+DIM).cuda())[0][0].cpu().detach().numpy()
+            # im2.set_data(image)
             
             ax2.clear()
             ax2.plot(range(len(progress_loss_D)), progress_loss_D, label="D")
