@@ -23,16 +23,16 @@ from torch.autograd import Variable
 # === GLOBAL VARIABLES ===
 DIM = (512, 512)
 SAMPLES = 0 # rasterized image output dimension
-EPOCHS = 2500 # number of training iterations
+EPOCHS = 5000 # number of training iterations
 REGION = "Gemeinde Schwerte" # change region to load a different data set
 DIR = 'Testdaten/testdata_marcel' # the directory where the floor and support directories are saved
 LEARNING_RATE_G = 0.0002 # learning rate generator
 LEARNING_RATE_D = 0.0002 # learning rate discriminator
 BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
-MINI_BATCH = 32
+MINI_BATCH = 16
 TRAIN_TEST_SPLIT = 0.8 # Percentage of trainig to test data (the number is the percentage of training samples)
-EXPERIMENT_NAME = "Pix2Pix U-Net" # naming variable to distinguish between experiments
+EXPERIMENT_NAME = "Pix2Pix U-Net without bad data" # naming variable to distinguish between experiments
 TRAIN_GAN = True
 TRAIN_GENERATOR = False
 # ===============
@@ -74,10 +74,15 @@ def raster_images():
 
 # === FUNCTION TO PROCESS DATA ===
 def process_images():
-    im_as_np_array = np.zeros((len(os.listdir(DIR + "/01_fl")) - 2,2) + DIM, dtype=np.uint8) #-2 because 2 floorplans are blank
-    counter = 0
     with open('Testdaten/testdata_processed/Dimensions.txt', 'r') as file:
         data = file.read().rstrip()
+    bad_data_file = open('Code/filter_imgs.txt', 'r')
+    bad_data = []
+    for x in bad_data_file:
+        bad_data.append(x)
+    bad_data = [s.rstrip() for s in bad_data]
+    im_as_np_array = np.zeros((len(os.listdir(DIR + "/01_fl")) - len(bad_data),2) + DIM, dtype=np.uint8)
+    counter = 0
     if (data != str(DIM)):
         print("Processing images...")
         file = open(f"Testdaten/testdata_processed/Dimensions.txt", "w")
@@ -86,7 +91,7 @@ def process_images():
         # initialize 4D block for layers of 2D images (image_nr, floor_or_supprt, pixel_x, pixel_y)
         for files in tqdm(os.listdir(DIR + "/02_sl")):
             # ZB_0048_01_fl.png, ZB_0133_01_fl.png are empty images (no need to generate support structures then)
-            if (files == 'ZB_0048_02_sl.png') or (files == 'ZB_0133_02_sl.png'):
+            if (files in bad_data):
                 continue
             floor = cv2.imread(os.path.join(DIR + "/02_sl", files), cv2.IMREAD_GRAYSCALE)
             supp_files = files[:len(files)-9] + '03_co.png'
@@ -232,7 +237,7 @@ class ResidualBlock(nn.Module):
 
 # === DISCRIMINATOR MODEL ===
 class Discriminator(nn.Module):
-    def __init__(self, d=8):
+    def __init__(self, d=32):
         super().__init__()
 
         self.conv1 = nn.Conv2d(2, d, 4, 2, 1)
@@ -258,7 +263,7 @@ class Discriminator(nn.Module):
 
 # === GENERATOR MODEL ===
 class Generator(nn.Module):
-    def __init__(self, d=8):
+    def __init__(self, d=32):
         super().__init__()
 
         # Unet encoder

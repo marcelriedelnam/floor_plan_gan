@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import os, os.path, math, sys, shutil, time, scipy, cv2
 from tqdm import tqdm
-from torch.autograd import Variable
 
 
 # === REQUIREMENTS ===
@@ -23,16 +22,16 @@ from torch.autograd import Variable
 # === GLOBAL VARIABLES ===
 DIM = (512, 512)
 SAMPLES = 0 # rasterized image output dimension
-EPOCHS = 2500 # number of training iterations
+EPOCHS = 5000 # number of training iterations
 REGION = "Gemeinde Schwerte" # change region to load a different data set
 DIR = 'Testdaten/testdata_marcel' # the directory where the floor and support directories are saved
-LEARNING_RATE_G = 0.0002 # learning rate generator
-LEARNING_RATE_D = 0.0002 # learning rate discriminator
+LEARNING_RATE_G = 0.0001 # learning rate generator
+LEARNING_RATE_D = 0.0001 # learning rate discriminator
 BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
-MINI_BATCH = 32
+MINI_BATCH = 16
 TRAIN_TEST_SPLIT = 0.8 # Percentage of trainig to test data (the number is the percentage of training samples)
-EXPERIMENT_NAME = "Pix2Pix U-Net" # naming variable to distinguish between experiments
+EXPERIMENT_NAME = "SDF no bad data" # naming variable to distinguish between experiments
 TRAIN_GAN = True
 TRAIN_GENERATOR = False
 # ===============
@@ -74,10 +73,15 @@ def raster_images():
 
 # === FUNCTION TO PROCESS DATA ===
 def process_images():
-    im_as_np_array = np.zeros((len(os.listdir(DIR + "/01_fl")) - 2,2) + DIM, dtype=np.uint8) #-2 because 2 floorplans are blank
-    counter = 0
     with open('Testdaten/testdata_processed/Dimensions.txt', 'r') as file:
         data = file.read().rstrip()
+        bad_data_file = open('Code/filter_imgs.txt', 'r')
+    bad_data = []
+    for x in bad_data_file:
+        bad_data.append(x)
+    bad_data = [s.rstrip() for s in bad_data]
+    im_as_np_array = np.zeros((len(os.listdir(DIR + "/01_fl")) - len(bad_data),2) + DIM, dtype=np.uint8)
+    counter = 0
     if (data != str(DIM)):
         print("Processing images...")
         file = open(f"Testdaten/testdata_processed/Dimensions.txt", "w")
@@ -86,7 +90,7 @@ def process_images():
         # initialize 4D block for layers of 2D images (image_nr, floor_or_supprt, pixel_x, pixel_y)
         for files in tqdm(os.listdir(DIR + "/02_sl")):
             # ZB_0048_01_fl.png, ZB_0133_01_fl.png are empty images (no need to generate support structures then)
-            if (files == 'ZB_0048_02_sl.png') or (files == 'ZB_0133_02_sl.png'):
+            if (files in bad_data):
                 continue
             floor = cv2.imread(os.path.join(DIR + "/02_sl", files), cv2.IMREAD_GRAYSCALE)
             supp_files = files[:len(files)-9] + '03_co.png'
@@ -160,10 +164,6 @@ def process_images():
             support = support.astype(float)
             floor = cv2.resize(floor, DIM)
             support = cv2.resize(support, DIM)
-            # floor as distance map (distance transform)
-            # floor = floor.astype(np.uint8)
-            # floor = cv2.distanceTransform(floor, cv2.DIST_L2, 3)
-            # floor.astype(float)
             cv2.imwrite(os.path.join('Testdaten/testdata_processed/floors', 'floor%03d' %counter + '.png'), floor)
             cv2.imwrite(os.path.join('Testdaten/testdata_processed/supports', 'support%03d' %counter + '.png'), support)
             im_as_np_array[counter] = np.append(floor, support).reshape((2,) + DIM)
@@ -177,6 +177,11 @@ def process_images():
             support = cv2.imread('Testdaten/testdata_processed/supports/' + supp_files,  cv2.IMREAD_GRAYSCALE)
             im_as_np_array[counter] = np.append(floor, support).reshape((2,) + DIM)
             counter += 1
+    # calculate SDF (signed distance function) of floor plate
+    floors_sdf = np.zeros((im_as_np_array.shape[0], 1) + DIM, dtype=np.uint8)
+    for i in range(im_as_np_array.shape[0]):
+        floors_sdf[i,0] = (cv2.distanceTransform((im_as_np_array[i,0]).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)).astype(np.float)
+    im_as_np_array = np.append(im_as_np_array, floors_sdf, 1).reshape((im_as_np_array.shape[0],3) + DIM)
     im_as_np_array = torch.FloatTensor(im_as_np_array) / 255
     return im_as_np_array
 # ======================
@@ -232,7 +237,7 @@ class ResidualBlock(nn.Module):
 
 # === DISCRIMINATOR MODEL ===
 class Discriminator(nn.Module):
-    def __init__(self, d=8):
+    def __init__(self, d=16):
         super().__init__()
 
         self.conv1 = nn.Conv2d(2, d, 4, 2, 1)
@@ -258,11 +263,11 @@ class Discriminator(nn.Module):
 
 # === GENERATOR MODEL ===
 class Generator(nn.Module):
-    def __init__(self, d=8):
+    def __init__(self, d=16):
         super().__init__()
 
         # Unet encoder
-        self.conv1 = nn.Conv2d(1, d, 4, 2, 1)
+        self.conv1 = nn.Conv2d(2, d, 4, 2, 1)
         self.conv2 = nn.Conv2d(d, d * 2, 4, 2, 1)
         self.conv2_bn = nn.BatchNorm2d(d * 2)
         self.conv3 = nn.Conv2d(d * 2, d * 4, 4, 2, 1)
@@ -313,7 +318,7 @@ class Generator(nn.Module):
         d3 = F.dropout(self.deconv3_bn(self.deconv3(F.relu(d2))), 0.5, training=True)
         d3 = torch.cat([d3, e5], 1)
         d4 = self.deconv4_bn(self.deconv4(F.relu(d3)))
-        # d4 = F.dropout(self.deconv4_bn(self.deconv4(F.relu(d3))), 0.5)
+         # d4 = F.dropout(self.deconv4_bn(self.deconv4(F.relu(d3))), 0.5)
         d4 = torch.cat([d4, e4], 1)
         d5 = self.deconv5_bn(self.deconv5(F.relu(d4)))
         d5 = torch.cat([d5, e3], 1)
@@ -324,7 +329,7 @@ class Generator(nn.Module):
         d7 = torch.cat([d7, e1], 1)
         d8 = self.deconv8(F.relu(d7))
         o = torch.sigmoid(d8)
-        # o = o * input
+        # o = o * input[:,0:1]
 
         return o
 # =============
@@ -341,10 +346,12 @@ class CustomImageDataset(Dataset):
     def __getitem__(self, index):
         floor = self.img_arr[index][0]
         support = self.img_arr[index][1]
+        floor_sdf = self.img_arr[index][2]
         if self.transform:
             floor = self.transform(floor)
             support = self.transform(support)
-        return floor, support
+            floor_sdf = self.transform(floor_sdf)
+        return floor, support, floor_sdf
 # ===========
 
 # === TRAINING GAN ===
@@ -409,11 +416,13 @@ def main():
     progress_loss_D = []
 
     for epoch in range(EPOCHS):
-        for (floors, supports) in train_dataloader:
-            floors, supports = floors.cuda(), supports.cuda()
+        for (floors, supports, floors_sdf) in train_dataloader:
+            floors, supports, floors_sdf = floors.cuda(), supports.cuda(), floors_sdf.cuda()
             floors = floors.reshape((MINI_BATCH,1)+DIM)
             supports = supports.reshape((MINI_BATCH,1)+DIM)
+            floors_sdf = floors_sdf.reshape((MINI_BATCH,1)+DIM)
             train_img_batch = torch.cat((floors, supports), 1)
+            G_input = torch.cat((floors, floors_sdf), 1)
 
             if TRAIN_GAN:
                 # train discriminator D
@@ -423,7 +432,7 @@ def main():
         
                 D_real_loss = D.loss_function(D_res, torch.ones_like(D_res, requires_grad=True).cuda())
 
-                G_res = G.forward(floors)
+                G_res = G.forward(G_input)
                 generated_imgs = torch.cat((floors, G_res), 1)
 
                 D_res = D.forward(generated_imgs)
@@ -437,7 +446,7 @@ def main():
                 G.zero_grad()
                 D.zero_grad()
 
-                G_res = G.forward(floors)
+                G_res = G.forward(G_input)
                 D_res = D.forward(torch.cat((floors, G_res), 1))
 
                 G_train_loss = D.loss_function(D_res, torch.ones_like(D_res, requires_grad=True).cuda()).cuda()
@@ -458,7 +467,7 @@ def main():
 
         if epoch % 1 == 0:
             image = np.zeros(DIM+(3,))
-            image[:,:,0] = floors[0, 0].cpu().detach().numpy()
+            image[:,:,0] = floors[0,0].cpu().detach().numpy()
             image[:,:,1] = G_res[0, 0].cpu().detach().numpy()
             im.set_data(image)
 
