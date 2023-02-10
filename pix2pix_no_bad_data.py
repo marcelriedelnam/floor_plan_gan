@@ -23,16 +23,16 @@ from torch.autograd import Variable
 # === GLOBAL VARIABLES ===
 DIM = (512, 512)
 SAMPLES = 0 # rasterized image output dimension
-EPOCHS = 5000 # number of training iterations
+EPOCHS = 10000 # number of training iterations
 REGION = "Gemeinde Schwerte" # change region to load a different data set
 DIR = 'Testdaten/testdata_marcel' # the directory where the floor and support directories are saved
 LEARNING_RATE_G = 0.0002 # learning rate generator
 LEARNING_RATE_D = 0.0002 # learning rate discriminator
 BETA_1 = 0.5 # beta_1 and beta_2 are "coefficients used for computing running averages of gradient and its square" - Adam wiki
 BETA_2 = 0.999
-MINI_BATCH = 16
+MINI_BATCH = 8
 TRAIN_TEST_SPLIT = 0.8 # Percentage of trainig to test data (the number is the percentage of training samples)
-EXPERIMENT_NAME = "Pix2Pix U-Net without bad data" # naming variable to distinguish between experiments
+EXPERIMENT_NAME = "Pix2Pix Small U-Net with ResNet and L1" # naming variable to distinguish between experiments
 TRAIN_GAN = True
 TRAIN_GENERATOR = False
 # ===============
@@ -159,16 +159,15 @@ def process_images():
                 support = support[top:bottom, left:right]
             # draw support structures onto floor plate (instead of only support structures)
             support = 255 - support
-            support = floor * support / 255
             # resize images
             floor = floor.astype(float)
             support = support.astype(float)
-            floor = cv2.resize(floor, DIM)
-            support = cv2.resize(support, DIM)
-            # floor as distance map (distance transform)
-            # floor = floor.astype(np.uint8)
-            # floor = cv2.distanceTransform(floor, cv2.DIST_L2, 3)
-            # floor.astype(float)
+            floor = cv2.resize(floor, DIM, interpolation=cv2.INTER_AREA)
+            support = cv2.resize(support, DIM, interpolation=cv2.INTER_AREA)
+            if counter == 24:
+                plt.imshow(support, 'gray')
+                plt.show()
+            support = floor * support
             cv2.imwrite(os.path.join('Testdaten/testdata_processed/floors', 'floor%03d' %counter + '.png'), floor)
             cv2.imwrite(os.path.join('Testdaten/testdata_processed/supports', 'support%03d' %counter + '.png'), support)
             im_as_np_array[counter] = np.append(floor, support).reshape((2,) + DIM)
@@ -237,7 +236,7 @@ class ResidualBlock(nn.Module):
 
 # === DISCRIMINATOR MODEL ===
 class Discriminator(nn.Module):
-    def __init__(self, d=32):
+    def __init__(self, d=64):
         super().__init__()
 
         self.conv1 = nn.Conv2d(2, d, 4, 2, 1)
@@ -263,7 +262,7 @@ class Discriminator(nn.Module):
 
 # === GENERATOR MODEL ===
 class Generator(nn.Module):
-    def __init__(self, d=32):
+    def __init__(self, d=64):
         super().__init__()
 
         # Unet encoder
@@ -273,62 +272,45 @@ class Generator(nn.Module):
         self.conv3 = nn.Conv2d(d * 2, d * 4, 4, 2, 1)
         self.conv3_bn = nn.BatchNorm2d(d * 4)
         self.conv4 = nn.Conv2d(d * 4, d * 8, 4, 2, 1)
-        self.conv4_bn = nn.BatchNorm2d(d * 8)
-        self.conv5 = nn.Conv2d(d * 8, d * 8, 4, 2, 1)
-        self.conv5_bn = nn.BatchNorm2d(d * 8)
-        self.conv6 = nn.Conv2d(d * 8, d * 8, 4, 2, 1)
-        self.conv6_bn = nn.BatchNorm2d(d * 8)
-        self.conv7 = nn.Conv2d(d * 8, d * 8, 4, 2, 1)
-        self.conv7_bn = nn.BatchNorm2d(d * 8)
-        self.conv8 = nn.Conv2d(d * 8, d * 8, 4, 2, 1)
-        # self.conv8_bn = nn.BatchNorm2d(d * 8)
+
+        # ResNet
+        self.resnet = nn.Sequential(
+            nn.Conv2d(d * 8, d * 8, 3, 1, 1),
+            nn.BatchNorm2d(d * 8),
+            nn.ReLU(),
+            nn.Conv2d(d * 8, d * 8, 3, 1, 1),
+            nn.BatchNorm2d(d * 8),
+        )
 
         # Unet decoder
-        self.deconv1 = nn.ConvTranspose2d(d * 8, d * 8, 4, 2, 1)
-        self.deconv1_bn = nn.BatchNorm2d(d * 8)
-        self.deconv2 = nn.ConvTranspose2d(d * 8 * 2, d * 8, 4, 2, 1)
-        self.deconv2_bn = nn.BatchNorm2d(d * 8)
-        self.deconv3 = nn.ConvTranspose2d(d * 8 * 2, d * 8, 4, 2, 1)
-        self.deconv3_bn = nn.BatchNorm2d(d * 8)
-        self.deconv4 = nn.ConvTranspose2d(d * 8 * 2, d * 8, 4, 2, 1)
-        self.deconv4_bn = nn.BatchNorm2d(d * 8)
-        self.deconv5 = nn.ConvTranspose2d(d * 8 * 2, d * 4, 4, 2, 1)
-        self.deconv5_bn = nn.BatchNorm2d(d * 4)
-        self.deconv6 = nn.ConvTranspose2d(d * 4 * 2, d * 2, 4, 2, 1)
-        self.deconv6_bn = nn.BatchNorm2d(d * 2)
-        self.deconv7 = nn.ConvTranspose2d(d * 2 * 2, d, 4, 2, 1)
-        self.deconv7_bn = nn.BatchNorm2d(d)
-        self.deconv8 = nn.ConvTranspose2d(d * 2, 1, 4, 2, 1)
+        self.deconv1 = nn.ConvTranspose2d(d * 8, d * 4, 4, 2, 1)
+        self.deconv1_bn = nn.BatchNorm2d(d * 4)
+        self.deconv2 = nn.ConvTranspose2d(d * 4 * 2, d * 2, 4, 2, 1)
+        self.deconv2_bn = nn.BatchNorm2d(d * 2)
+        self.deconv3 = nn.ConvTranspose2d(d * 2 * 2, d, 4, 2, 1)
+        self.deconv3_bn = nn.BatchNorm2d(d)
+        self.deconv4 = nn.ConvTranspose2d(d * 2, 1, 4, 2, 1)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE_G, betas=(BETA_1, BETA_2))
     # forward method
     def forward(self, input):
         e1 = self.conv1(input)
         e2 = self.conv2_bn(self.conv2(F.leaky_relu(e1, 0.2)))
         e3 = self.conv3_bn(self.conv3(F.leaky_relu(e2, 0.2)))
-        e4 = self.conv4_bn(self.conv4(F.leaky_relu(e3, 0.2)))
-        e5 = self.conv5_bn(self.conv5(F.leaky_relu(e4, 0.2)))
-        e6 = self.conv6_bn(self.conv6(F.leaky_relu(e5, 0.2)))
-        e7 = self.conv7_bn(self.conv7(F.leaky_relu(e6, 0.2)))
-        e8 = self.conv8(F.leaky_relu(e7, 0.2))
-        # e8 = self.conv8_bn(self.conv8(F.leaky_relu(e7, 0.2)))
-        d1 = F.dropout(self.deconv1_bn(self.deconv1(F.relu(e8))), 0.5, training=True)
-        d1 = torch.cat([d1, e7], 1)
+        e4 = self.conv4(F.leaky_relu(e3, 0.2))
+        r1 = F.relu(self.resnet(e4) + e4)
+        r2 = F.relu(self.resnet(r1) + r1)
+        r3 = F.relu(self.resnet(r2) + r2)
+        r4 = F.relu(self.resnet(r3) + r3)
+        r5 = F.relu(self.resnet(r4) + r4)
+        r6 = F.relu(self.resnet(r5) + r5)
+        d1 = F.dropout(self.deconv1_bn(self.deconv1(F.relu(r6))), 0.5, training=True)
+        d1 = torch.cat([d1, e3], 1)
         d2 = F.dropout(self.deconv2_bn(self.deconv2(F.relu(d1))), 0.5, training=True)
-        d2 = torch.cat([d2, e6], 1)
+        d2 = torch.cat([d2, e2], 1)
         d3 = F.dropout(self.deconv3_bn(self.deconv3(F.relu(d2))), 0.5, training=True)
-        d3 = torch.cat([d3, e5], 1)
-        d4 = self.deconv4_bn(self.deconv4(F.relu(d3)))
-        # d4 = F.dropout(self.deconv4_bn(self.deconv4(F.relu(d3))), 0.5)
-        d4 = torch.cat([d4, e4], 1)
-        d5 = self.deconv5_bn(self.deconv5(F.relu(d4)))
-        d5 = torch.cat([d5, e3], 1)
-        d6 = self.deconv6_bn(self.deconv6(F.relu(d5)))
-        d6 = torch.cat([d6, e2], 1)
-        d7 = self.deconv7_bn(self.deconv7(F.relu(d6)))
-        # d7 = torch.zeros_like(d7)
-        d7 = torch.cat([d7, e1], 1)
-        d8 = self.deconv8(F.relu(d7))
-        o = torch.sigmoid(d8)
+        d3 = torch.cat([d3, e1], 1)
+        d4 = self.deconv4(F.relu(d3))
+        o = torch.sigmoid(d4)
         # o = o * input
 
         return o
@@ -349,6 +331,7 @@ class CustomImageDataset(Dataset):
         if self.transform:
             floor = self.transform(floor)
             support = self.transform(support)
+            # TODO cat both, tranform and split (and test theory)
         return floor, support
 # ===========
 
@@ -414,6 +397,8 @@ def main():
     progress_loss_D = []
 
     for epoch in range(EPOCHS):
+        running_loss_G = 0.0
+        running_loss_D = 0.0
         for (floors, supports) in train_dataloader:
             floors, supports = floors.cuda(), supports.cuda()
             floors = floors.reshape((MINI_BATCH,1)+DIM)
@@ -441,16 +426,17 @@ def main():
                 # train generator G
                 G.zero_grad()
                 D.zero_grad()
+                L1Loss = nn.L1Loss().cuda()
 
                 G_res = G.forward(floors)
                 D_res = D.forward(torch.cat((floors, G_res), 1))
 
-                G_train_loss = D.loss_function(D_res, torch.ones_like(D_res, requires_grad=True).cuda()).cuda()
+                G_train_loss = D.loss_function(D_res, torch.ones_like(D_res, requires_grad=True).cuda()).cuda() + 100 * L1Loss(G_res, supports)
                 G_train_loss.backward()
                 G.optimizer.step()
 
-                progress_loss_G.append(G_train_loss.item())
-                progress_loss_D.append(D_train_loss.item())
+                running_loss_G += G_train_loss.item() * floors.size(0)
+                running_loss_D += D_train_loss.item() * floors.size(0)
             
             if TRAIN_GENERATOR:
                 G.zero_grad()
@@ -466,6 +452,7 @@ def main():
             image[:,:,0] = floors[0, 0].cpu().detach().numpy()
             image[:,:,1] = G_res[0, 0].cpu().detach().numpy()
             im.set_data(image)
+            ax1.set_xlabel('Resulting supports')
 
             # input_img = train_imgs[torch.randint(0, train_imgs.shape[0], (1,))]
             # image[:,:,0] = input_img.cpu().detach().numpy()
@@ -474,12 +461,18 @@ def main():
 
             ax4.clear()
             ax4.hist(image[:,:,1].ravel(), bins=256, label='G_res')
+            ax4.set_xlabel('Color Value')
+            ax4.set_ylabel('Number of pixels')
             # ax4.hist(image[:,:,0].ravel(), bins=256, label='input')
             ax4.legend()
 
             ax2.clear()
-            ax2.plot(range(len(progress_loss_D)), progress_loss_D, label="D")
-            ax2.plot(range(len(progress_loss_G)), progress_loss_G, label="G")
+            progress_loss_D.append(running_loss_D / len(train_set))
+            progress_loss_G.append(running_loss_G / len(train_set))
+            ax2.plot(progress_loss_D, label="D")
+            ax2.plot(progress_loss_G, label="G")
+            ax2.set_xlabel('Epochs')
+            ax2.set_ylabel('Error')
             ax2.legend()
             fig.canvas.draw_idle()
             plt.savefig(f'Ergebnisse/{res_dir}/{epoch}.png')
